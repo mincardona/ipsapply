@@ -1,8 +1,125 @@
 #include "config_ipsapply.h"
 #include "options.h"
 #include "util.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#define HUNK_OFFSET_WIDTH 3
+#define HUNK_LENGTH_WIDTH 2
+#define TRUNC_LENGTH_WIDTH 3
+
+#define FILE_CODE_OK 0
+#define FILE_CODE_EARLY_EOF 1
+#define FILE_CODE_ERROR 2
+
+const char* FILE_CODE_STR[] = {
+    "ok",
+    "unexpected EOF",
+    "I/O error"
+};
+
+#define FILE_CODE(F) (feof(F) ? FILE_CODE_EARLY_EOF : FILE_CODE_ERROR)
+
+const char EOF_MARKER[] = "EOF";
+const char MAGIC_PATCH[] = "PATCH";
+
+enum hunk_header_type {
+    HUNK_REGULAR,
+    HUNK_RLE,
+    HUNK_EOF
+};
+
+struct hunk_header {
+    enum hunk_header_type type;
+
+    int offset;
+    int length;
+    unsigned char fill;   /* RLE only */
+};
+
+int decode_big_endian_3(unsigned char bytes[3]) {
+    return (bytes[0] << 16) | (bytes[1] << 8) | bytes[2];
+}
+
+int decode_big_endian_2(unsigned char bytes[2]) {
+    return (bytes[0] << 8) | bytes[1];
+}
+
+int read_hunk_header(FILE* f, struct hunk_header* h) {
+    /* all hunk header fields are 3 bytes wide at most */
+    unsigned char buf[3] = { 0 };
+    size_t chars_read = 0;
+
+    /* get offset or EOF marker */
+    chars_read = fread(buf, 1, HUNK_OFFSET_WIDTH, f);
+    if (chars_read < HUNK_OFFSET_WIDTH) {
+        return FILE_CODE(f);
+    } else if (MEMEQ(buf, EOF_MARKER, HUNK_OFFSET_WIDTH)) {
+        h->type = HUNK_EOF;
+        return FILE_CODE_OK;
+    } else {
+        h->offset = decode_big_endian_3(buf);
+    }
+
+    /* get regular length */
+    chars_read = fread(buf, 1, HUNK_LENGTH_WIDTH, f);
+    if (chars_read < HUNK_LENGTH_WIDTH) {
+        return FILE_CODE(f);
+    }
+    h->length = decode_big_endian_2(buf);
+    if (h->length != 0) {
+        h->type = HUNK_REGULAR;
+        return FILE_CODE_OK;
+    } else {
+        h->type = HUNK_RLE;
+    }
+
+    /* at this point, this is an RLE hunk */
+    /* read the RLE length */
+    chars_read = fread(buf, 1, HUNK_LENGTH_WIDTH, f);
+    if (chars_read < HUNK_LENGTH_WIDTH) {
+        return FILE_CODE(f);
+    }
+    h->length = decode_big_endian_2(buf);
+
+    /* read the RLE fill byte */
+    chars_read = fread(buf, 1, 1, f);
+    if (chars_read < 1) {
+        return FILE_CODE(f);
+    }
+    h->fill = buf[0];
+
+    return FILE_CODE_OK;
+}
+
+int read_magic_patch(FILE* f, int* found) {
+    char buf[6] = { 0 };
+    size_t chars_read = fread(buf, 1, 5, f);
+    if (chars_read < 5) {
+        return FILE_CODE(f);
+    }
+    *found = STREQ(MAGIC_PATCH, buf);
+    return FILE_CODE_OK;
+}
+
+/* if the function succeeds, and length is -1, no post data was provided */
+int read_trunc_length(FILE* f, int* length) {
+    unsigned char buf[3] = { 0 };
+    size_t chars_read = fread(buf, 1, TRUNC_LENGTH_WIDTH, f);
+
+    if (chars_read == 0 && FILE_CODE(f) == FILE_CODE_EARLY_EOF) {
+        /* it's OK if no data at all exists past the EOF marker */
+        *length = -1;
+    } else if (chars_read < TRUNC_LENGTH_WIDTH) {
+        return FILE_CODE(f);
+    } else {
+        *length = decode_big_endian_3(buf);
+    }
+
+    return FILE_CODE_OK;
+}
 
 int subcommand_apply(struct exec_options* eo) {
     (void)eo;
@@ -11,9 +128,113 @@ int subcommand_apply(struct exec_options* eo) {
 }
 
 int subcommand_text(struct exec_options* eo) {
-    (void)eo;
-    printf("nop\n");
+    FILE* input_file = NULL;
+    FILE* output_file = NULL;
+    int magic_patch_found = 0;
+    int code = 0;
+    struct hunk_header hunk = { HUNK_EOF, 0, 0, '\0' };
+
+    if (!eo->patch_file_path) {
+        fprintf(stderr, "error: no patch file provided\n");
+        return EXIT_FAILURE;
+    }
+
+    if (STREQ(eo->patch_file_path, "-")) {
+        input_file = stdin;
+    } else {
+        input_file = fopen(eo->patch_file_path, "rb");
+        if (input_file == NULL) {
+            fprintf(stderr, "error: failed to open patch file\n");
+            goto ERROR;
+        }
+    }
+
+    if (!eo->output_file_path || STREQ(eo->output_file_path, "-")) {
+        output_file = stdout;
+    } else {
+        output_file = fopen(eo->output_file_path, "wb");
+        if (output_file == NULL) {
+            fprintf(stderr, "error: failed to open output file\n");
+            goto ERROR;
+        }
+    }
+
+    /* parse the patch file */
+
+    /* read magic PATCH */
+    code = read_magic_patch(input_file, &magic_patch_found);
+    if (code) {
+        fprintf(stderr, "error: while detecting magic PATCH: %s\n", FILE_CODE_STR[code]);
+        goto ERROR;
+    } else if (!magic_patch_found) {
+        fprintf(stderr, "error: magic PATCH not found\n");
+        goto ERROR;
+    } else {
+        fprintf(output_file, "0x00000000 PATCH\n");
+    }
+
+    /* read hunks */
+    for (;;) {
+        long told = ftell(input_file);
+        if (told == -1L) {
+            fprintf(stderr, "error: failed ftell on input file: %s\n", strerror(errno));
+            goto ERROR;
+        }
+
+        code = read_hunk_header(input_file, &hunk);
+        if (code) {
+            fprintf(stderr, "error: while reading hunks: %s\n", FILE_CODE_STR[code]);
+            goto ERROR;
+        }
+
+        fprintf(output_file, "0x%.8lx ", (unsigned long)told);
+        if (hunk.type == HUNK_EOF) {
+            fprintf(output_file, "EOF\n");
+            break;
+        } else if (hunk.type == HUNK_REGULAR) {
+            fprintf(
+                output_file,
+                "REGULAR offset=%#.6x length=%#.4x\n",
+                (unsigned)hunk.offset, (unsigned)hunk.length
+            );
+            /* skip the hunk payload */
+            if (fseek(input_file, hunk.length, SEEK_CUR)) {
+                fprintf(stderr, "error: while reading hunks: failed to seek past a hunk payload\n");
+                goto ERROR;
+            }
+        } else /* HUNK_RLE */ {
+            fprintf(
+                output_file,
+                "RLE offset=%#.6x length=%#.4x fill=%#.2x\n",
+                (unsigned)hunk.offset, (unsigned)hunk.length, (unsigned)hunk.fill
+            );
+        }
+    }
+
+    /* read truncation */
+
+    if (input_file != stdin) {
+        fclose(input_file);
+        input_file = NULL;
+    }
+    if (output_file != stdout) {
+        if (fclose(output_file) == EOF) {
+            output_file = NULL;
+            fprintf(stderr, "error: unable to close output file\n");
+            goto ERROR;
+        }
+    }
+
     return EXIT_SUCCESS;
+
+ERROR:
+    if (input_file && input_file != stdin) {
+        fclose(input_file);
+    }
+    if (output_file && output_file != stdout) {
+        fclose(output_file);
+    }
+    return EXIT_FAILURE;
 }
 
 int main(int argc, char** argv) {

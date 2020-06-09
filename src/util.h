@@ -12,4 +12,6 @@ void* xmalloc(size_t size);
 /* Truthy if two string compare equal */
 #define STREQ(A, B) (!strcmp((A), (B)))
 
+#define MEMEQ(A, B, L) (!memcmp((A), (B), (L)))
+
 #endif
