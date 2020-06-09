@@ -17,7 +17,9 @@
 const char* FILE_CODE_STR[] = {
     "ok",
     "unexpected EOF",
-    "I/O error"
+    "I/O error",
+    /* add new strings between these */
+    "FILE_CODE_STR bounds error"
 };
 
 #define FILE_CODE(F) (feof(F) ? FILE_CODE_EARLY_EOF : FILE_CODE_ERROR)
@@ -132,6 +134,8 @@ int subcommand_text(struct exec_options* eo) {
     FILE* output_file = NULL;
     int magic_patch_found = 0;
     int code = 0;
+    int trunc_length = 0;
+    int expect_eof_char = EOF;
     struct hunk_header hunk = { HUNK_EOF, 0, 0, '\0' };
 
     if (!eo->patch_file_path) {
@@ -211,7 +215,30 @@ int subcommand_text(struct exec_options* eo) {
         }
     }
 
-    /* read truncation */
+    /* optional truncation */
+    if (eo->respect_post_trunc) {
+        code = read_trunc_length(input_file, &trunc_length);
+        if (code) {
+            fprintf(stderr, "error: while reading truncation length: %s\n", FILE_CODE_STR[code]);
+            goto ERROR;
+        } else if (trunc_length >= 0) {
+            fprintf(output_file, "TRUNCATE length=%#.6x\n", (unsigned)trunc_length);
+        }
+
+        /* test for additional unexpected data and issue a warning.
+           we only do this if we were instructed to check for a truncation
+           length after the EOF marker */
+        expect_eof_char = getc(input_file);
+        if (expect_eof_char == EOF && !feof(input_file)) {
+            fprintf(stderr, "error: while checking for post-truncation-length data: I/O error\n");
+        } else if (expect_eof_char != EOF) {
+            ungetc(expect_eof_char, input_file);
+            /* unexpected data at the tail of the file */
+            fprintf(stderr, "warning: unexpected bytes at end of file. ignoring...\n");
+        }
+    }
+
+    /* cleanup */
 
     if (input_file != stdin) {
         fclose(input_file);
