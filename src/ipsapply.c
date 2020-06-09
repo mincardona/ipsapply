@@ -217,7 +217,13 @@ int subcommand_text(struct exec_options* eo) {
         fclose(input_file);
         input_file = NULL;
     }
-    if (output_file != stdout) {
+
+    if (output_file == stdout) {
+        if (fflush(output_file) == EOF) {
+            fprintf(stderr, "error: unable to flush output file\n");
+            goto ERROR;
+        }
+    } else {
         if (fclose(output_file) == EOF) {
             output_file = NULL;
             fprintf(stderr, "error: unable to close output file\n");
