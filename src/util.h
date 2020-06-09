@@ -1,6 +1,7 @@
 #ifndef UTIL_H_INCLUDED
 #define UTIL_H_INCLUDED
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -13,5 +14,11 @@ void* xmalloc(size_t size);
 #define STREQ(A, B) (!strcmp((A), (B)))
 
 #define MEMEQ(A, B, L) (!memcmp((A), (B), (L)))
+
+/**
+ * Truncates a file to a certain number of bytes in length, then seeks to the
+ * end of the file. Returns 0 on success or nonzero on error.
+ */
+int truncate_file(FILE* f, int bytes);
 
 #endif
