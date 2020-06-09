@@ -1,4 +1,5 @@
 #include "config_ipsapply.h"
+#include "options.h"
 #include <stdio.h>
 #include <stdlib.h>
 

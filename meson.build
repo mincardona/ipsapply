@@ -1,7 +1,8 @@
 project('ipsapply', 'c', default_options : ['c_std=c89', 'werror=true'])
 
 srcs = [
-    'src/ipsapply.c'
+    'src/ipsapply.c',
+    'src/options.c'
 ]
 
 cargs = ['-pedantic-errors', '-Wall', '-Wextra', '-fno-strict-aliasing']
