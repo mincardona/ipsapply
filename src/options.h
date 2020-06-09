@@ -4,7 +4,12 @@
 struct exec_options {
     char* patch_file_path;
     char* patient_file_path;
-    int do_respect_post_trunc;
+    char* output_file_path;
+    int respect_post_trunc;
+    int help;
+
+    int parse_success;
+    int final_optind;
 };
 
 struct exec_options* parse_exec_options(int argc, char** argv);
