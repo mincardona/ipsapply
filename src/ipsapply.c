@@ -2,6 +2,7 @@
 #include "options.h"
 #include "util.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -136,6 +137,7 @@ int subcommand_text(struct exec_options* eo) {
     int code = 0;
     int trunc_length = 0;
     int expect_eof_char = EOF;
+    int warned_ftell_failure = 0;
     struct hunk_header hunk = { HUNK_EOF, 0, 0, '\0' };
 
     if (!eo->patch_file_path) {
@@ -181,8 +183,11 @@ int subcommand_text(struct exec_options* eo) {
     for (;;) {
         long told = ftell(input_file);
         if (told == -1L) {
-            fprintf(stderr, "error: failed ftell on input file: %s\n", strerror(errno));
-            goto ERROR;
+            if (!warned_ftell_failure) {
+                fprintf(stderr, "warning: failed ftell on input file: %s\n", strerror(errno));
+                warned_ftell_failure = 1;
+            }
+            told = LONG_MAX;
         }
 
         code = read_hunk_header(input_file, &hunk);
