@@ -92,8 +92,7 @@ struct exec_options* parse_exec_options(int argc, char** argv) {
 
 void free_exec_options(struct exec_options* eo) {
     free(eo->patch_file_path);
-    eo->patch_file_path = NULL;
     free(eo->patient_file_path);
-    eo->patient_file_path = NULL;
+    free(eo->output_file_path);
     free(eo);
 }
