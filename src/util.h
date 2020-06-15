@@ -21,4 +21,11 @@ void* xmalloc(size_t size);
  */
 int truncate_file(FILE* f, int bytes);
 
+/**
+ * Copies all data from src to dest. Data is read from src and written to dest
+ * starting at the current file offset. Returns 0 on success or nonzero on
+ * error.
+ */
+int copy_file(FILE* src, FILE* dest);
+
 #endif

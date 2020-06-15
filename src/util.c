@@ -58,3 +58,34 @@ int truncate_file(FILE* f, int bytes) {
 #endif
     return 0;
 }
+
+int copy_file(FILE* src, FILE* dest) {
+    /* there are OS-specific functions for this,
+       but a read/write loop works for now */
+
+    const size_t buflen = 4096;
+    unsigned char* buf = xmalloc(buflen);
+
+    int done = 0;
+    while (!done) {
+        size_t chars_read = fread(buf, 1, buflen, src);
+        if (chars_read < buflen) {
+            if (feof(src)) {
+                /* write the last (partial) block, then end the loop */
+                done = 1;
+            } else {
+                goto ERROR;
+            }
+        }
+        if (fwrite(buf, 1, chars_read, dest) < chars_read) {
+            goto ERROR;
+        }
+    }
+
+    free(buf);
+    return 0;
+
+ERROR:
+    free(buf);
+    return -1;
+}

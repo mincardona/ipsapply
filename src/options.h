@@ -5,6 +5,7 @@ struct exec_options {
     char* patch_file_path;
     char* patient_file_path;
     char* output_file_path;
+    char* text_file_path;
     int respect_post_trunc;
     int help;
 

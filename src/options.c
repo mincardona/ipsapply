@@ -9,7 +9,8 @@
 #define LONGOPT_ID_PATIENT_FILE 1001
 #define LONGOPT_ID_POST_TRUNC 1002
 #define LONGOPT_ID_HELP 1003
-#define LONGOUT_ID_OUTPUT_FILE 1004
+#define LONGOPT_ID_OUTPUT_FILE 1004
+#define LONGOPT_ID_TEXT_PATH 1005
 
 /**
  * Copies a string from src to *dest. If *dest is non-NULL, it is first free()d.
@@ -27,7 +28,7 @@ char* clone_string(char** dest, const char* src) {
 }
 
 struct exec_options* parse_exec_options(int argc, char** argv) {
-    const char* shortopts = "p:f:o:t";
+    const char* shortopts = "p:f:o:x:t";
     struct exec_options* ret = NULL;
 
     struct option longopts[] = {
@@ -35,7 +36,8 @@ struct exec_options* parse_exec_options(int argc, char** argv) {
         { "patient-path", required_argument, NULL, LONGOPT_ID_PATIENT_FILE },
         { "post-trunc",   no_argument,       NULL, LONGOPT_ID_POST_TRUNC },
         { "help",         no_argument,       NULL, LONGOPT_ID_HELP },
-        { "output-path",  required_argument, NULL, LONGOUT_ID_OUTPUT_FILE },
+        { "output-path",  required_argument, NULL, LONGOPT_ID_OUTPUT_FILE },
+        { "text-path",    required_argument, NULL, LONGOPT_ID_TEXT_PATH },
         { 0, 0, 0, 0 }
     };
 
@@ -66,7 +68,7 @@ struct exec_options* parse_exec_options(int argc, char** argv) {
             clone_string(&ret->patient_file_path, optarg);
             break;
         case 'o':
-        case LONGOUT_ID_OUTPUT_FILE:
+        case LONGOPT_ID_OUTPUT_FILE:
             clone_string(&ret->output_file_path, optarg);
             break;
         case 't':
@@ -75,6 +77,10 @@ struct exec_options* parse_exec_options(int argc, char** argv) {
             break;
         case LONGOPT_ID_HELP:
             ret->help = 1;
+            break;
+        case 'x':
+        case LONGOPT_ID_TEXT_PATH:
+            clone_string(&ret->text_file_path, optarg);
             break;
         case '?':
         case ':':
@@ -94,5 +100,6 @@ void free_exec_options(struct exec_options* eo) {
     free(eo->patch_file_path);
     free(eo->patient_file_path);
     free(eo->output_file_path);
+    free(eo->text_file_path);
     free(eo);
 }

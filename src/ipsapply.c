@@ -124,43 +124,69 @@ int read_trunc_length(FILE* f, int* length) {
     return FILE_CODE_OK;
 }
 
-int subcommand_apply(struct exec_options* eo) {
-    (void)eo;
-    printf("nop\n");
-    return EXIT_SUCCESS;
+void print_patch_directive(FILE* f) {
+    if (f) {
+        fprintf(f, "0x00000000 PATCH\n");
+    }
 }
 
-int subcommand_text(struct exec_options* eo) {
-    FILE* input_file = NULL;
-    FILE* output_file = NULL;
+void print_hunk_directive(FILE* f, long offset, const struct hunk_header* hunk) {
+    if (!f) {
+        return;
+    }
+
+    fprintf(f, "0x%.8lx ", (unsigned long)offset);
+
+    switch (hunk->type) {
+    case HUNK_REGULAR:
+        fprintf(f, "REGULAR offset=%#.6x length=%#.4x\n",
+            (unsigned)hunk->offset, (unsigned)hunk->length
+        );
+        break;
+    case HUNK_RLE:
+        fprintf(f, "RLE offset=%#.6x length=%#.4x fill=%#.2x\n",
+            (unsigned)hunk->offset, (unsigned)hunk->length,
+            (unsigned)hunk->fill
+        );
+        break;
+    default: /* HUNK_EOF */
+        fprintf(f, "EOF\n");
+        break;
+    }
+}
+
+void print_trunc_directive(FILE* f, int trunc_length) {
+    fprintf(f, "TRUNCATE length=%#.6x\n", (unsigned)trunc_length);
+}
+
+int patch_parse(
+    struct exec_options* eo,
+    FILE* patch_file,
+    FILE* text_file,
+    FILE* patient_file,
+    FILE* output_file)
+{
     int magic_patch_found = 0;
     int code = 0;
-    int trunc_length = 0;
-    int expect_eof_char = EOF;
     int warned_ftell_failure = 0;
     struct hunk_header hunk = { HUNK_EOF, 0, 0, '\0' };
+    unsigned char* pay_buf = NULL;
 
-    if (!eo->patch_file_path) {
-        fprintf(stderr, "error: no patch file provided\n");
-        return EXIT_FAILURE;
+    /* check some preconditions */
+    if (patch_file == NULL || ((patient_file == NULL) != (output_file == NULL))) {
+        fprintf(stderr, "error: invalid file combination in patch_parse\n");
+        goto ERROR;
     }
 
-    if (STREQ(eo->patch_file_path, "-")) {
-        input_file = stdin;
-    } else {
-        input_file = fopen(eo->patch_file_path, "rb");
-        if (input_file == NULL) {
-            fprintf(stderr, "error: failed to open patch file\n");
-            goto ERROR;
-        }
-    }
+    pay_buf = xmalloc((1 << (8 * HUNK_LENGTH_WIDTH)) - 1);
 
-    if (!eo->output_file_path || STREQ(eo->output_file_path, "-")) {
-        output_file = stdout;
-    } else {
-        output_file = fopen(eo->output_file_path, "wb");
-        if (output_file == NULL) {
-            fprintf(stderr, "error: failed to open output file\n");
+    /* copy the patient file to the output file to start */
+    if (patient_file) {
+        if (copy_file(patient_file, output_file)
+            || fseek(patient_file, 0, SEEK_SET)
+            || fseek(output_file, 0, SEEK_SET))
+        {
+            fprintf(stderr, "error: failed to copy patient data to output file\n");
             goto ERROR;
         }
     }
@@ -168,110 +194,262 @@ int subcommand_text(struct exec_options* eo) {
     /* parse the patch file */
 
     /* read magic PATCH */
-    code = read_magic_patch(input_file, &magic_patch_found);
+    code = read_magic_patch(patch_file, &magic_patch_found);
     if (code) {
-        fprintf(stderr, "error: while detecting magic PATCH: %s\n", FILE_CODE_STR[code]);
+        fprintf(stderr, "error: while detecting magic PATCH: "
+            "%s\n", FILE_CODE_STR[code]);
         goto ERROR;
     } else if (!magic_patch_found) {
         fprintf(stderr, "error: magic PATCH not found\n");
         goto ERROR;
-    } else {
-        fprintf(output_file, "0x00000000 PATCH\n");
     }
+    print_patch_directive(text_file);
 
     /* read hunks */
     for (;;) {
-        long told = ftell(input_file);
+        long told = ftell(patch_file);
         if (told == -1L) {
             if (!warned_ftell_failure) {
-                fprintf(stderr, "warning: failed ftell on input file: %s\n", strerror(errno));
+                fprintf(stderr, "warning: failed ftell on input file: %s\n",
+                    strerror(errno));
                 warned_ftell_failure = 1;
             }
             told = LONG_MAX;
         }
 
-        code = read_hunk_header(input_file, &hunk);
+        code = read_hunk_header(patch_file, &hunk);
         if (code) {
-            fprintf(stderr, "error: while reading hunks: %s\n", FILE_CODE_STR[code]);
+            fprintf(stderr, "error: while reading hunks: %s\n",
+                FILE_CODE_STR[code]);
             goto ERROR;
         }
 
-        fprintf(output_file, "0x%.8lx ", (unsigned long)told);
+        /* print offset (in patch file) of current hunk directive */
+        print_hunk_directive(text_file, (unsigned long)told, &hunk);
+
         if (hunk.type == HUNK_EOF) {
-            fprintf(output_file, "EOF\n");
             break;
         } else if (hunk.type == HUNK_REGULAR) {
-            fprintf(
-                output_file,
-                "REGULAR offset=%#.6x length=%#.4x\n",
-                (unsigned)hunk.offset, (unsigned)hunk.length
-            );
-            /* skip the hunk payload */
-            if (fseek(input_file, hunk.length, SEEK_CUR)) {
-                fprintf(stderr, "error: while reading hunks: failed to seek past a hunk payload\n");
-                goto ERROR;
+            if (output_file) {
+                if (fread(pay_buf, 1, hunk.length, patch_file) < (size_t)hunk.length) {
+                    fprintf(
+                        stderr,
+                        "error: while reading hunk payload: %s\n",
+                        FILE_CODE_STR[FILE_CODE(patch_file)]
+                    );
+                    goto ERROR;
+                }
+                if (fseek(output_file, hunk.offset, SEEK_SET)) {
+                    fprintf(stderr, "error: unable to seek to hunk payload"
+                        " offset in patient file");
+                    goto ERROR;
+                }
+                if (fwrite(pay_buf, 1, hunk.length, output_file) < (size_t)hunk.length) {
+                    fprintf(
+                        stderr,
+                        "error: while writing hunk payload: %s\n",
+                        FILE_CODE_STR[FILE_CODE(output_file)]
+                    );
+                    goto ERROR;
+                }
+            } else {
+                /* skip the hunk payload because we aren't applying it */
+                if (fseek(patch_file, hunk.length, SEEK_CUR)) {
+                    fprintf(stderr, "error: while reading hunks:"
+                        " failed to seek past hunk payload\n");
+                    goto ERROR;
+                }
             }
-        } else /* HUNK_RLE */ {
-            fprintf(
-                output_file,
-                "RLE offset=%#.6x length=%#.4x fill=%#.2x\n",
-                (unsigned)hunk.offset, (unsigned)hunk.length, (unsigned)hunk.fill
-            );
+        } else { /* HUNK_RLE */
+            if (output_file) {
+                if (fseek(output_file, hunk.offset, SEEK_SET)) {
+                    fprintf(stderr, "error: unable to seek to RLE hunk payload"
+                        " offset in patient file");
+                    goto ERROR;
+                }
+                memset(pay_buf, hunk.fill, hunk.length);
+                if (fwrite(pay_buf, 1, hunk.length, output_file) < (size_t)hunk.length) {
+                    fprintf(stderr,
+                        "error: while writing RLE hunk payload: %s\n",
+                        FILE_CODE_STR[FILE_CODE(output_file)]
+                    );
+                    goto ERROR;
+                }
+            }
         }
     }
 
     /* optional truncation */
     if (eo->respect_post_trunc) {
-        code = read_trunc_length(input_file, &trunc_length);
+        int expect_eof_char = EOF;
+        int trunc_length = 0;
+        code = read_trunc_length(patch_file, &trunc_length);
         if (code) {
-            fprintf(stderr, "error: while reading truncation length: %s\n", FILE_CODE_STR[code]);
+            fprintf(stderr, "error: while reading truncation length: %s\n",
+                FILE_CODE_STR[code]);
             goto ERROR;
         } else if (trunc_length >= 0) {
-            fprintf(output_file, "TRUNCATE length=%#.6x\n", (unsigned)trunc_length);
+            print_trunc_directive(text_file, trunc_length);
+            if (output_file && truncate_file(output_file, trunc_length)) {
+                fprintf(stderr, "error: failed to truncate file");
+                goto ERROR;
+            }
         }
 
         /* test for additional unexpected data and issue a warning.
            we only do this if we were instructed to check for a truncation
            length after the EOF marker */
-        expect_eof_char = getc(input_file);
-        if (expect_eof_char == EOF && !feof(input_file)) {
-            fprintf(stderr, "error: while checking for post-truncation-length data: I/O error\n");
+        expect_eof_char = getc(patch_file);
+        if (expect_eof_char == EOF && !feof(patch_file)) {
+            fprintf(stderr, "error: while checking for"
+                " post-truncation-length data: I/O error\n");
         } else if (expect_eof_char != EOF) {
-            ungetc(expect_eof_char, input_file);
+            ungetc(expect_eof_char, patch_file);
             /* unexpected data at the tail of the file */
-            fprintf(stderr, "warning: unexpected bytes at end of file. ignoring...\n");
+            fprintf(stderr, "warning: unexpected bytes at end of file."
+                " ignoring...\n");
         }
     }
 
     /* cleanup */
-
-    if (input_file != stdin) {
-        fclose(input_file);
-        input_file = NULL;
-    }
-
-    if (output_file == stdout) {
-        if (fflush(output_file) == EOF) {
-            fprintf(stderr, "error: unable to flush output file\n");
-            goto ERROR;
-        }
-    } else {
-        if (fclose(output_file) == EOF) {
-            output_file = NULL;
-            fprintf(stderr, "error: unable to close output file\n");
-            goto ERROR;
-        }
-    }
-
+    free(pay_buf);
     return EXIT_SUCCESS;
 
 ERROR:
-    if (input_file && input_file != stdin) {
-        fclose(input_file);
+    free(pay_buf);
+    return EXIT_FAILURE;
+}
+
+/**
+ * A wrapper for fopen(path, "rb") that treats the path "-" as stdin.
+ * This is intended for opening patch files.
+ */
+FILE* fopen_patch(const char* path) {
+    if (!path) {
+        return NULL;
+    } else if (STREQ(path, "-")) {
+        return stdin;
+    } else {
+        return fopen(path, "rb");
     }
-    if (output_file && output_file != stdout) {
-        fclose(output_file);
+}
+
+FILE* fopen_patient(const char* path) {
+    return fopen_patch(path);
+}
+
+FILE* fopen_text(const char* path) {
+    if (!path || STREQ(path, "-")) {
+        return stdout;
+    } else {
+        return fopen(path, "w");
     }
+}
+
+FILE* fopen_output(const char* path) {
+    if (!path) {
+        return NULL;
+    }
+    return fopen(path, "wb");
+}
+
+int fclose_check(FILE* f) {
+    if (f && f != stdin && f != stdout) {
+        return fclose(f);
+    }
+    return 0;
+}
+
+int subcommand_apply(struct exec_options* eo) {
+    int return_code = EXIT_FAILURE;
+    FILE* patch_file = NULL;
+    FILE* text_file = NULL;
+    FILE* patient_file = NULL;
+    FILE* output_file = NULL;
+
+    /* text file is optional for this subcommand */
+    if (eo->text_file_path && !(text_file = fopen_text(eo->text_file_path))) {
+        fprintf(stderr, "error: failed to open text file\n");
+        goto ERROR;
+    }
+
+    if (!(patch_file = fopen_patch(eo->patch_file_path))) {
+        fprintf(stderr, "error: failed to open patch file\n");
+        goto ERROR;
+    }
+
+    if (!(patient_file = fopen_patient(eo->patient_file_path))) {
+        fprintf(stderr, "error: failed to open patient file\n");
+        goto ERROR;
+    }
+
+    if (!(output_file = fopen_output(eo->output_file_path))) {
+        fprintf(stderr, "error: failed to open output file\n");
+        goto ERROR;
+    }
+
+    return_code = patch_parse(eo, patch_file, text_file, patient_file, output_file);
+
+    fclose_check(patch_file);
+    patch_file = NULL;
+    fclose_check(patient_file);
+    patient_file = NULL;
+
+    if (fclose_check(text_file)) {
+        text_file = NULL;
+        fprintf(stderr, "error: unable to close text file\n");
+        goto ERROR;
+    }
+    text_file = NULL;
+
+    if (fclose_check(output_file)) {
+        output_file = NULL;
+        fprintf(stderr, "error: unable to close output file\n");
+        goto ERROR;
+    }
+    output_file = NULL;
+
+    return return_code;
+
+ERROR:
+    fclose_check(patch_file);
+    fclose_check(patient_file);
+    fclose_check(text_file);
+    fclose_check(output_file);
+    return EXIT_FAILURE;
+}
+
+int subcommand_text(struct exec_options* eo) {
+    int return_code = EXIT_FAILURE;
+    FILE* patch_file = NULL;
+    FILE* text_file = NULL;
+    
+    if (!(patch_file = fopen_patch(eo->patch_file_path))) {
+        fprintf(stderr, "error: failed to open patch file\n");
+        goto ERROR;
+    }
+
+    if (!(text_file = fopen_text(eo->text_file_path))) {
+        fprintf(stderr, "error: failed to open text file\n");
+        goto ERROR;
+    }
+
+    return_code = patch_parse(eo, patch_file, text_file, NULL, NULL);
+
+    fclose_check(patch_file);
+    patch_file = NULL;
+
+    if (fclose_check(text_file)) {
+        text_file = NULL;
+        fprintf(stderr, "error: unable to close text file\n");
+        goto ERROR;
+    }
+
+    return return_code;
+
+ERROR:
+    fclose_check(patch_file);
+    fclose_check(text_file);
     return EXIT_FAILURE;
 }
 
@@ -281,7 +459,8 @@ int main(int argc, char** argv) {
 
     eo = parse_exec_options(argc, argv);
     if (!eo->parse_success) {
-        fprintf(stderr, "%s\n", "Error parsing options. Use `ipsa --help` to view help.");
+        fprintf(stderr, "%s\n", "Error parsing options."
+            " Use `ipsa --help` to view help.");
         exit_code = EXIT_FAILURE;
     } else if (eo->help) {
         printf(
@@ -295,7 +474,8 @@ int main(int argc, char** argv) {
     } else {
         char* subcommand = argv[eo->final_optind];
         if (!subcommand) {
-            fprintf(stderr, "%s\n", "No subcommand given. Use `ipsa --help` to view help.");
+            fprintf(stderr, "%s\n", "No subcommand given."
+                " Use `ipsa --help` to view help.");
             exit_code = EXIT_FAILURE;
         } else if (STREQ(subcommand, "apply")) {
             exit_code = subcommand_apply(eo);
