@@ -229,7 +229,13 @@ int patch_parse(
 
         if (hunk.type == HUNK_EOF) {
             break;
-        } else if (hunk.type == HUNK_REGULAR) {
+        }
+
+        if (hunk.length == 0) {
+            fprintf(stderr, "warning: hunk with length 0\n");
+        }
+
+        if (hunk.type == HUNK_REGULAR) {
             if (output_file) {
                 if (fread(pay_buf, 1, hunk.length, patch_file) < (size_t)hunk.length) {
                     fprintf(
