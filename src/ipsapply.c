@@ -308,7 +308,7 @@ int patch_parse(
         expect_eof_char = getc(patch_file);
         if (expect_eof_char == EOF && !feof(patch_file)) {
             fprintf(stderr, "error: while checking for"
-                " post-truncation-length data: I/O error\n");
+                " post-truncation-length data: %s\n", FILE_CODE_STR[FILE_CODE(patch_file)]);
         } else if (expect_eof_char != EOF) {
             ungetc(expect_eof_char, patch_file);
             /* unexpected data at the tail of the file */
