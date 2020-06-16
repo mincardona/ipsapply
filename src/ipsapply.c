@@ -2,7 +2,9 @@
 #include "options.h"
 #include "util.h"
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -459,6 +461,50 @@ ERROR:
     return EXIT_FAILURE;
 }
 
+int subcommand_crc32(const struct exec_options* eo) {
+    FILE* patient_file = NULL;
+    const size_t buflen = 4096;
+    unsigned char* buf = NULL;
+    int done = 0;
+    uint32_t crc = CRC32_BASE;
+
+    if (!(patient_file = fopen_patient(eo->patient_file_path))) {
+        fprintf(stderr, "error: failed to open patient file\n");
+        goto ERROR;
+    }
+
+    buf = xmalloc(buflen);
+
+    crc32_init();
+
+    while (!done) {
+        size_t chars_read = fread(buf, 1, buflen, patient_file);
+        if (chars_read < buflen) {
+            if (feof(patient_file)) {
+                done = 1;
+            } else {
+                fprintf(stderr, "error: while reading patient file: %s\n",
+                    FILE_CODE_STR[FILE_CODE(patient_file)]);
+                goto ERROR;
+            }
+        }
+        crc = crc32_update(crc, buf, chars_read);
+    }
+
+    crc = crc32_finalize(crc);
+
+    printf("%.8" PRIX32 "\n", crc);
+
+    free(buf);
+    fclose_check(patient_file);
+    return EXIT_SUCCESS;
+
+ERROR:
+    free(buf);
+    fclose_check(patient_file);
+    return EXIT_FAILURE;
+}
+
 int main(int argc, char** argv) {
     struct exec_options* eo = NULL;
     int exit_code = EXIT_SUCCESS;
@@ -487,6 +533,8 @@ int main(int argc, char** argv) {
             exit_code = subcommand_apply(eo);
         } else if (STREQ(subcommand, "text")) {
             exit_code = subcommand_text(eo);
+        } else if (STREQ(subcommand, "crc32")) {
+            exit_code = subcommand_crc32(eo);
         }
     }
 

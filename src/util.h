@@ -1,6 +1,7 @@
 #ifndef UTIL_H_INCLUDED
 #define UTIL_H_INCLUDED
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,5 +28,14 @@ int truncate_file(FILE* f, int bytes);
  * error.
  */
 int copy_file(FILE* src, FILE* dest);
+
+/*******************************************************************************
+CRC32 functions
+*******************************************************************************/
+#define CRC32_BASE (0xffffffffu)
+void crc32_init();
+uint32_t crc32_update(uint32_t crc_prev, void* buf, size_t len);
+uint32_t crc32_finalize(uint32_t crc_prev);
+uint32_t crc32_quick(void* buf, size_t len);
 
 #endif

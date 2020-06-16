@@ -89,3 +89,46 @@ ERROR:
     free(buf);
     return -1;
 }
+
+/*******************************************************************************
+CRC32 functions
+This implementation is based on the algorithm from Annex D of the Portable
+Network Graphics (PNG) Specification (Second Edition)
+<https://www.w3.org/TR/PNG>
+*******************************************************************************/
+static uint32_t crc32_memo[0x100];
+
+void crc32_init() {
+    const uint32_t poly = 0xedb88320u;
+    uint32_t pre;
+    uint32_t i;
+    for (i = 0; i < 0x100; i++) {
+        int j;
+        pre = i;
+        for (j = 0; j < 8; j++) {
+            if (pre & 1) {
+                pre = poly ^ (pre >> 1);
+            } else {
+                pre >>= 1;
+            }
+        }
+        crc32_memo[i] = pre;
+    }
+}
+
+uint32_t crc32_update(uint32_t crc_prev, void* buf, size_t len) {
+    uint32_t crc_next = crc_prev;
+    size_t i;
+    for (i = 0; i < len; i++) {
+        crc_next = crc32_memo[(crc_next ^ ((unsigned char*)buf)[i]) & 0xff] ^ (crc_next >> 8);
+    }
+    return crc_next;
+}
+
+uint32_t crc32_finalize(uint32_t crc_prev) {
+    return crc_prev ^ CRC32_BASE;
+}
+
+uint32_t crc32_quick(void* buf, size_t len) {
+    return crc32_finalize(crc32_update(CRC32_BASE, buf, len));
+}
