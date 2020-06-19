@@ -40,11 +40,12 @@ int truncate_file(FILE* f, int bytes) {
     }
 #elif defined(_WIN32)
     {
+        HANDLE h = INVALID_HANDLE_VALUE;
         int fd = _fileno(f);
         if (fd < 0) {
             return -1;
         }
-        HANDLE h = (HANDLE)_get_osfhandle(fd);
+        h = (HANDLE)_get_osfhandle(fd);
         if (h == INVALID_HANDLE_VALUE) {
             return -1;
         }
@@ -74,18 +75,18 @@ int copy_file(FILE* src, FILE* dest) {
                 /* write the last (partial) block, then end the loop */
                 done = 1;
             } else {
-                goto ERROR;
+                goto _ERROR;
             }
         }
         if (fwrite(buf, 1, chars_read, dest) < chars_read) {
-            goto ERROR;
+            goto _ERROR;
         }
     }
 
     free(buf);
     return 0;
 
-ERROR:
+_ERROR:
     free(buf);
     return -1;
 }
