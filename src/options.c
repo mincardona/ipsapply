@@ -44,9 +44,12 @@ struct exec_options* parse_exec_options(int argc, char** argv) {
     ret = xmalloc(sizeof(*ret));
     ret->patch_file_path = NULL;
     ret->patient_file_path = NULL;
+    ret->text_file_path = NULL;
+    ret->output_file_path = NULL;
     ret->respect_post_trunc = 0;
     ret->help = 0;
     ret->parse_success = 0;
+    ret->final_optind = 0;
 
     opterr = 1; /* print errors on bad options */
 
